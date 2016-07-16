@@ -12,7 +12,11 @@ var Flow = {
 		gravity: 0.65,
 		centerGravity: 0.0,
 		wind: 0.35,
-		friction: 0.0
+		friction: 0.0,
+
+		number: 20,
+		speed: 0.5,
+		spread: 0.5
 	},
 
 	init: function() {
@@ -64,10 +68,12 @@ var Flow = {
 		Flow.canvas = document.getElementById("display");
 		Flow.canvas.width = Flow.canvas.style.width = Flow.w;
 		Flow.canvas.height = Flow.canvas.style.height = Flow.h;
-		document.addEventListener("mousemove", function(event){
-			Mouse.x = Math.min(Flow.w, Math.max(0, event.pageX - Flow.canvas.offsetLeft));
-			Mouse.y = Math.min(Flow.h, Math.max(0, event.pageY - Flow.canvas.offsetTop));
-		}, false);
+		var mouseEvent = function(x,y){
+			Mouse.x = Math.min(Flow.w, Math.max(0, x - Flow.canvas.offsetLeft));
+			Mouse.y = Math.min(Flow.h, Math.max(0, y - Flow.canvas.offsetTop));
+		}
+		document.addEventListener("mousemove", function(event){mouseEvent(event.pageX, event.pageY);}, false);
+		document.addEventListener("touchmove", function(event){mouseEvent(event.targetTouches[0].pageX, event.targetTouches[0].pageY);}, false);
 
 		//dat.gui
 		var gui = new dat.GUI();
@@ -76,6 +82,10 @@ var Flow = {
 		phys.add(Flow.settings, "centerGravity").min(0).max(1).step(0.05);
 		phys.add(Flow.settings, "wind").min(0).max(1).step(0.05);
 		phys.add(Flow.settings, "friction").min(0).max(1).step(0.05);
+		var inte = gui.addFolder("Interaction");
+		inte.add(Flow.settings, "number").min(0).max(40).step(1);
+		inte.add(Flow.settings, "speed").min(0).max(1).step(0.1);
+		inte.add(Flow.settings, "spread").min(0).max(Math.PI).step(0.1);
 
 		//image data buffers
 		Flow.ctx = Flow.canvas.getContext("2d");
@@ -116,7 +126,9 @@ var Flow = {
 		var dir = Math.atan2(dy,dx);
 		var steps = Math.min(Math.floor(len), 200);
 		len /= dt;
-		var pps = 20;
+		var pps = Flow.settings.number;
+		var spd = Flow.settings.speed;
+		var spread = Flow.settings.spread;
 		dx /= steps;
 		dy /= steps;
 		var posX = Mouse.px,
@@ -130,8 +142,8 @@ var Flow = {
 				Flow.particles[idx+1] = posX+dx*j;
 				Flow.particles[idx+2] = posY+dy*j;
 
-				var dir2 = dir + Math.random()*0.5-0.25;
-				var len2 = (Math.random()*0.5+0.5)*len*4;
+				var dir2 = dir + Math.random()*spread-spread/2;
+				var len2 = (Math.random()*0.5+0.5)*len*8*spd;
 				Flow.particles[idx+3] = Math.cos(dir2)*len2 + Math.random()*2 - 1;
 				Flow.particles[idx+4] = Math.sin(dir2)*len2 + Math.random()*2 - 1;
 			}

@@ -64,13 +64,13 @@ var Flow = {
 		}
 
 		//DOM
-		Flow.output = document.getElementById("info");
-		Flow.canvas = document.getElementById("display");
-		Flow.canvas.width = Flow.canvas.style.width = Flow.w;
-		Flow.canvas.height = Flow.canvas.style.height = Flow.h;
+		Flow.output = document.getElementById("display");
+		Flow.canvas = document.createElement("canvas");
+		Flow.output.width = Flow.canvas.width = Flow.canvas.style.width = Flow.w;
+		Flow.output.height = Flow.canvas.height = Flow.canvas.style.height = Flow.h;
 		var mouseEvent = function(x,y){
-			Mouse.x = Math.min(Flow.w, Math.max(0, x - Flow.canvas.offsetLeft));
-			Mouse.y = Math.min(Flow.h, Math.max(0, y - Flow.canvas.offsetTop));
+			Mouse.x = Math.min(Flow.w, Math.max(0, x - Flow.output.offsetLeft));
+			Mouse.y = Math.min(Flow.h, Math.max(0, y - Flow.output.offsetTop));
 		}
 		document.addEventListener("mousemove", function(event){mouseEvent(event.pageX, event.pageY);}, false);
 		document.addEventListener("touchmove", function(event){mouseEvent(event.targetTouches[0].pageX, event.targetTouches[0].pageY);}, false);
@@ -88,6 +88,7 @@ var Flow = {
 		inte.add(Flow.settings, "spread").min(0).max(Math.PI).step(0.1);
 
 		//image data buffers
+		Flow.octx = Flow.output.getContext("2d");
 		Flow.ctx = Flow.canvas.getContext("2d");
 		Flow.idata = Flow.ctx.getImageData(0,0,Flow.w,Flow.h);
 		Flow.buffer = new ArrayBuffer(Flow.idata.data.length);
@@ -139,15 +140,22 @@ var Flow = {
 				Flow.insertIdx = (Flow.insertIdx+1)%Flow.N;
 				var idx = Flow.insertIdx*Flow.nProps;
 				Flow.particles[idx+0] = 1;
+
+				//set initial position (interpolated)
 				Flow.particles[idx+1] = posX+dx*j;
 				Flow.particles[idx+2] = posY+dy*j;
 
+				//randomize initial velocity
 				var dir2 = dir + Math.random()*spread-spread/2;
 				var len2 = (Math.random()*0.5+0.5)*len*8*spd;
+
+				//set initial velocity
 				Flow.particles[idx+3] = Math.cos(dir2)*len2 + Math.random()*2 - 1;
 				Flow.particles[idx+4] = Math.sin(dir2)*len2 + Math.random()*2 - 1;
 			}
 		}
+
+		//record previous mouse position
 		Mouse.px = Mouse.x;
 		Mouse.py = Mouse.y;
 
@@ -203,8 +211,8 @@ var Flow = {
 			particles[i+4] = particles[i+4] * friction + gravity - gy*cgravity + wy;
 
 			//bounds check
-			if (x<0 || y<0 || x>Flow.w || y>Flow.h) {
-				Flow.particles[i+0] = 0;
+			if (x<0 || y<0 || x>w || y>h) {
+				particles[i+0] = 0;
 				continue;
 			}
 
@@ -215,10 +223,17 @@ var Flow = {
 		Flow.idata.data.set(Flow.buffer8);
 		Flow.ctx.putImageData(Flow.idata, 0, 0);
 		
+		Flow.octx.drawImage(Flow.canvas, 0, 0);
+
 		//fps display
-		Flow.ctx.fillStyle = "white";
-		Flow.ctx.font = "12px monospace";
-		Flow.ctx.fillText("FPS: "+(1000/Flow.frameTime).toFixed(1), 8, 12);
+		var fpsstr = "FPS: "+(1000/Flow.frameTime).toFixed(1);
+		Flow.octx.fillStyle = "black";
+		Flow.octx.fillRect(8,8,Flow.octx.measureText(fpsstr).width,16);
+		Flow.octx.fillStyle = "white";
+		Flow.octx.font = "12px monospace";
+		Flow.octx.textAlign = "left";
+		Flow.octx.textBaseline = "top";
+		Flow.octx.fillText(fpsstr, 8, 12);
 
 		requestAnimationFrame(Flow.draw);
 	}

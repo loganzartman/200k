@@ -13,10 +13,14 @@ var Flow = {
 		centerGravity: 0.0,
 		wind: 0.35,
 		friction: 0.0,
+		edgeMode: "remove",
 
 		number: 20,
 		speed: 0.5,
-		spread: 0.5
+		spread: 0.5,
+		interactMode: "add",
+
+		useBlending: false
 	},
 
 	init: function() {
@@ -25,43 +29,9 @@ var Flow = {
 		Flow.particles = new Float32Array(Flow.N * Flow.nProps);
 		
 		//precalculate colors for each particle
-		Flow.pColors = new Int32Array(Flow.N);
-		for (var i=0,j=Flow.N; i<j; i++) {
-			//HSL to RGB conversion
-			var val = i/j;
-			var sector = ~~(val*6);
-			var z = ~~(255*(1-Math.abs((val/0.166)%2-1)));
-			var r=0,g=0,b=0,a=255;
-			switch (sector) {
-				case 0:
-					r = 255;
-					g = z;
-				break;
-				case 1:
-					r = z;
-					g = 255;
-				break;
-				case 2:
-					g = 255;
-					b = z;
-				break;
-				case 3:
-					g = z;
-					b = 255;
-				break;
-				case 4:
-					r = z;
-					b = 255;
-				break;
-				case 5:
-					r = 255;
-					b = z;
-				break;
-			}
-
-			//pack
-			Flow.pColors[i] = Flow.color(r,g,b,a);
-		}
+		Flow.pColors = new Uint8Array(Flow.N*4);
+		Flow.pColorsBuffer = new Uint8Array(Flow.w*Flow.h*4);
+		Flow.resetColors();
 
 		//DOM
 		Flow.output = document.getElementById("display");
@@ -82,10 +52,32 @@ var Flow = {
 		phys.add(Flow.settings, "centerGravity").min(0).max(1).step(0.05);
 		phys.add(Flow.settings, "wind").min(0).max(1).step(0.05);
 		phys.add(Flow.settings, "friction").min(0).max(1).step(0.05);
+		phys.add(Flow.settings, "edgeMode", ["remove", "wrap"]);
 		var inte = gui.addFolder("Interaction");
+		inte.add(Flow.settings, "interactMode", ["add", "push"]);
 		inte.add(Flow.settings, "number").min(0).max(40).step(1);
 		inte.add(Flow.settings, "speed").min(0).max(1).step(0.1);
 		inte.add(Flow.settings, "spread").min(0).max(Math.PI).step(0.1);
+		inte.add({"loadImage": function(){
+			var input = document.createElement("input");
+			input.setAttribute("type", "file");
+			input.addEventListener("change", function(event){
+				if (!(input.files) || !(input.files[0])) return;
+				var reader = new FileReader();
+	    		reader.onload = function(e) {
+	    			var fr = new FileReader();
+	    			fr.onload = function(e2) {
+	    				Flow.fromImage(e2.target.result);
+	    			}
+	    			fr.readAsDataURL(input.files[0]);
+	    		};
+	    		reader.readAsText(this.files[0]);
+	        }, false);
+	        input.click();
+		}}, "loadImage");
+		var rend = gui.addFolder("Rendering");
+		rend.add(Flow, "resetColors");
+		rend.add(Flow.settings, "useBlending");
 
 		//image data buffers
 		Flow.octx = Flow.output.getContext("2d");
@@ -134,7 +126,7 @@ var Flow = {
 		dy /= steps;
 		var posX = Mouse.px,
 			posY = Mouse.py;
-		if (len > 0)
+		if (len > 0 && Flow.settings.interactMode === "add")
 		for (var j=0; j<steps; j++) {
 			for (var k=0; k<pps; k++) {
 				Flow.insertIdx = (Flow.insertIdx+1)%Flow.N;
@@ -159,12 +151,6 @@ var Flow = {
 		Mouse.px = Mouse.x;
 		Mouse.py = Mouse.y;
 
-		//clear to background color
-		var bcol = Flow.color(13,11,10,255);
-		for (var i=0,j=Flow.w*Flow.h; i<j; i++) {
-			Flow.buffer32[i] = bcol;
-		}
-
 		//there is a slight performance penalty for accessing properties;
 		//it's better to only do this once.
 		var particles = Flow.particles;
@@ -173,7 +159,28 @@ var Flow = {
 		var wind = Flow.settings.wind;
 		var friction = 1-Flow.settings.friction;
 		var sin = FastMath.sin;
-		var buffer32 = Flow.buffer32, pColors = Flow.pColors, nProps = Flow.nProps;
+		var blending = Flow.settings.useBlending;
+		var buffer32 = Flow.buffer32, pColors = Flow.pColors, pColorsBuffer = Flow.pColorsBuffer, nProps = Flow.nProps;
+		var wrap = Flow.settings.edgeMode === "wrap";
+		var touch = false;
+		if (Flow.settings.interactMode === "push" && len > 0) {
+			touch = true;
+			var mouseForceX = Math.cos(dir)*len*Flow.settings.speed*7;
+			var mouseForceY = Math.sin(dir)*len*Flow.settings.speed*7;
+		}
+		
+		//clear to background color
+		var bcol = Flow.color(13,11,10,255);
+		for (var i=0,j=w*h; i<j; i++) {
+			buffer32[i] = bcol;
+			var i4 = i*4;
+			if (blending) {
+				pColorsBuffer[i4] = 0;
+				pColorsBuffer[i4+1] = 0;
+				pColorsBuffer[i4+2] = 0;
+				pColorsBuffer[i4+3] = 255;
+			}
+		}
 
 		//physics and drawing
 		for (i=0,j=particles.length; i<j; i+=Flow.nProps) {
@@ -206,19 +213,62 @@ var Flow = {
 				wy = sin(x*0.02 + t*1.24) * wind;
 			}
 
+			//touch
+			var tfx = 0, tfy = 0;
+			if (touch) {
+				var dxmouse = x - Mouse.x;
+				var dymouse = y - Mouse.y;
+				var dmouse = Math.sqrt(dxmouse*dxmouse + dymouse*dymouse);
+				var force = 1-Math.min(1,dmouse/80);
+				if (force > 0) {
+					tfx = mouseForceX*force + Math.random()*2 - 1;
+					tfy = mouseForceY*force + Math.random()*2 - 1;
+				}
+			}
+
 			//integrate acceleration
-			particles[i+3] = particles[i+3] * friction - gx*cgravity + wx;
-			particles[i+4] = particles[i+4] * friction + gravity - gy*cgravity + wy;
+			particles[i+3] = particles[i+3] * friction - gx*cgravity + wx + tfx;
+			particles[i+4] = particles[i+4] * friction + gravity - gy*cgravity + wy + tfy;
 
 			//bounds check
 			if (x<0 || y<0 || x>w || y>h) {
-				particles[i+0] = 0;
-				continue;
+				if (wrap) {
+					if (x<0) x=w+x;
+					if (y<0) y=h+y;
+					if (x>w) x=x-w;
+					if (y>h) y=y-h;
+					particles[i+1] = x;
+					particles[i+2] = y;
+				}
+				else {
+					particles[i+0] = 0;
+					continue;
+				}
 			}
 
 			//draw
 			var idx = (~~y)*w+(~~x);
-			buffer32[idx] = pColors[~~(i/nProps)];
+			var cidx = ~~(i*4/nProps);
+			var r,g,b,a;
+
+			if (blending) {
+				var bidx = idx*4;
+				r = Math.min(255, (pColors[cidx+0] >>> 2) + pColorsBuffer[bidx+0]);
+				g = Math.min(255, (pColors[cidx+1] >>> 2) + pColorsBuffer[bidx+1]);
+				b = Math.min(255, (pColors[cidx+2] >>> 2) + pColorsBuffer[bidx+2]);
+				a = Math.min(255, (pColors[cidx+3] >>> 2) + pColorsBuffer[bidx+3]);
+				pColorsBuffer[bidx+0] = r;
+				pColorsBuffer[bidx+1] = g;
+				pColorsBuffer[bidx+2] = b;
+				pColorsBuffer[bidx+3] = a;
+			}
+			else {
+				r = pColors[cidx+0];
+				g = pColors[cidx+1];
+				b = pColors[cidx+2];
+				a = pColors[cidx+3];
+			}
+			buffer32[idx] = (a<<24)|(b<<16)|(g<<8)|(r);
 		}
 		Flow.idata.data.set(Flow.buffer8);
 		Flow.ctx.putImageData(Flow.idata, 0, 0);
@@ -236,6 +286,90 @@ var Flow = {
 		Flow.octx.fillText(fpsstr, 8, 12);
 
 		requestAnimationFrame(Flow.draw);
+	},
+
+	resetColors: function() {
+		for (var i=0,j=Flow.N; i<j; i++) {
+			//HSL to RGB conversion
+			var val = i/j;
+			var sector = ~~(val*6);
+			var z = ~~(255*(1-Math.abs((val/0.166)%2-1)));
+			var r=0,g=0,b=0,a=255;
+			switch (sector) {
+				case 0:
+					r = 255;
+					g = z;
+				break;
+				case 1:
+					r = z;
+					g = 255;
+				break;
+				case 2:
+					g = 255;
+					b = z;
+				break;
+				case 3:
+					g = z;
+					b = 255;
+				break;
+				case 4:
+					r = z;
+					b = 255;
+				break;
+				case 5:
+					r = 255;
+					b = z;
+				break;
+			}
+
+			//pack
+			Flow.pColors[i*4] = r;
+			Flow.pColors[i*4+1] = g;
+			Flow.pColors[i*4+2] = b;
+			Flow.pColors[i*4+3] = a;
+		}
+	},
+
+	fromImage: function(url) {
+		console.log(url);
+		Flow.settings.gravity = 0;
+		Flow.settings.wind = 0;
+		Flow.settings.interactMode = "push";
+
+		var img = new Image();
+		img.onload = function(){
+			var temp = document.createElement("canvas");
+			var size = Math.floor(Math.sqrt(Flow.N));
+			temp.width = size;
+			temp.height = size;
+
+			var tctx = temp.getContext("2d");
+			tctx.drawImage(img, 0, 0, temp.width, temp.height);
+			var idata = tctx.getImageData(0,0,temp.width,temp.height);
+			var data = idata.data;
+			
+			var particles = Flow.particles, pColors = Flow.pColors, nProps = Flow.nProps;
+			var offsetX = Math.floor(Flow.w*0.5 - temp.width*0.5);
+			var offsetY = Math.floor(Flow.h*0.5 - temp.height*0.5);
+			var i = 0;
+			for (var x=0; x<temp.width; x++) {
+				for (var y=0; y<temp.height; y++) {
+					particles[i*nProps] = 1;
+					particles[i*nProps+1] = x + offsetX;
+					particles[i*nProps+2] = y + offsetY;
+					particles[i*nProps+3] = 0;
+					particles[i*nProps+4] = 0;
+
+					var srcIdx = (x*temp.width+y)*4;
+					pColors[i*4+0] = data[srcIdx+0];
+					pColors[i*4+1] = data[srcIdx+1];
+					pColors[i*4+2] = data[srcIdx+2];
+					pColors[i*4+3] = data[srcIdx+3];
+					i++;
+				}
+			}
+		};
+		img.src = url;
 	}
 };
 

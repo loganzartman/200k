@@ -20,7 +20,8 @@ var Flow = {
 		spread: 0.5,
 		interactMode: "add",
 
-		useBlending: false
+		useBlending: false,
+		showDebug: true
 	},
 
 	init: function() {
@@ -43,7 +44,10 @@ var Flow = {
 			Mouse.y = Math.min(Flow.h, Math.max(0, y - Flow.output.offsetTop));
 		}
 		document.addEventListener("mousemove", function(event){mouseEvent(event.pageX, event.pageY);}, false);
-		document.addEventListener("touchmove", function(event){mouseEvent(event.targetTouches[0].pageX, event.targetTouches[0].pageY);}, false);
+		document.addEventListener("touchmove", function(event){
+			mouseEvent(event.targetTouches[0].pageX, event.targetTouches[0].pageY);
+			if (event.target === Flow.output) event.preventDefault();
+		}, false);
 
 		//dat.gui
 		var gui = new dat.GUI();
@@ -78,6 +82,7 @@ var Flow = {
 		var rend = gui.addFolder("Rendering");
 		rend.add(Flow, "resetColors");
 		rend.add(Flow.settings, "useBlending");
+		rend.add(Flow.settings, "showDebug");
 
 		//image data buffers
 		Flow.octx = Flow.output.getContext("2d");
@@ -96,6 +101,15 @@ var Flow = {
 	 */
 	color: function(r,g,b,a) {
 		return (a<<24)|(b<<16)|(g<<8)|(r);
+	},
+
+	unpack: function(rgbInt) {
+		return [
+			(rgbInt) & 255,
+			(rgbInt >>> 8) & 255,
+			(rgbInt >>> 16) & 255,
+			(rgbInt >>> 24) & 255
+		];
 	},
 
 	/**
@@ -158,9 +172,10 @@ var Flow = {
 		var cgravity = Flow.settings.centerGravity;
 		var wind = Flow.settings.wind;
 		var friction = 1-Flow.settings.friction;
-		var sin = FastMath.sin;
+		var sin = FastMath.sin, min = Math.min, max = Math.max;
 		var blending = Flow.settings.useBlending;
 		var buffer32 = Flow.buffer32, pColors = Flow.pColors, pColorsBuffer = Flow.pColorsBuffer, nProps = Flow.nProps;
+		var pcblen = pColorsBuffer.length-4;
 		var wrap = Flow.settings.edgeMode === "wrap";
 		var touch = false;
 		if (Flow.settings.interactMode === "push" && len > 0) {
@@ -171,21 +186,24 @@ var Flow = {
 		
 		//clear to background color
 		var bcol = Flow.color(13,11,10,255);
+		var ubcol = Flow.unpack(bcol);
 		for (var i=0,j=w*h; i<j; i++) {
 			buffer32[i] = bcol;
 			var i4 = i*4;
 			if (blending) {
-				pColorsBuffer[i4] = 0;
-				pColorsBuffer[i4+1] = 0;
-				pColorsBuffer[i4+2] = 0;
-				pColorsBuffer[i4+3] = 255;
+				pColorsBuffer[i4] = ubcol[0];
+				pColorsBuffer[i4+1] = ubcol[1];
+				pColorsBuffer[i4+2] = ubcol[2];
+				pColorsBuffer[i4+3] = ubcol[3];
 			}
 		}
 
 		//physics and drawing
+		var activeCount = 0;
 		for (i=0,j=particles.length; i<j; i+=Flow.nProps) {
 			//skip inactive particles
 			if (particles[i+0] === 0) continue;
+			activeCount++;
 
 			//integrate velocity
 			particles[i+1] += particles[i+3];
@@ -231,19 +249,17 @@ var Flow = {
 			particles[i+4] = particles[i+4] * friction + gravity - gy*cgravity + wy + tfy;
 
 			//bounds check
+			if (wrap) {
+				if (x<0) x=w+x;
+				if (y<0) y=h+y;
+				if (x>w) x=x-w;
+				if (y>h) y=y-h;
+				particles[i+1] = x;
+				particles[i+2] = y;
+			}
 			if (x<0 || y<0 || x>w || y>h) {
-				if (wrap) {
-					if (x<0) x=w+x;
-					if (y<0) y=h+y;
-					if (x>w) x=x-w;
-					if (y>h) y=y-h;
-					particles[i+1] = x;
-					particles[i+2] = y;
-				}
-				else {
-					particles[i+0] = 0;
-					continue;
-				}
+				particles[i+0] = 0;
+				continue;
 			}
 
 			//draw
@@ -253,10 +269,11 @@ var Flow = {
 
 			if (blending) {
 				var bidx = idx*4;
-				r = Math.min(255, (pColors[cidx+0] >>> 2) + pColorsBuffer[bidx+0]);
-				g = Math.min(255, (pColors[cidx+1] >>> 2) + pColorsBuffer[bidx+1]);
-				b = Math.min(255, (pColors[cidx+2] >>> 2) + pColorsBuffer[bidx+2]);
-				a = Math.min(255, (pColors[cidx+3] >>> 2) + pColorsBuffer[bidx+3]);
+				bidx = min(pcblen,max(0,bidx));
+				r = ~~min(255, (pColors[cidx+0] * 0.25) + pColorsBuffer[bidx+0]);
+				g = ~~min(255, (pColors[cidx+1] * 0.25) + pColorsBuffer[bidx+1]);
+				b = ~~min(255, (pColors[cidx+2] * 0.25) + pColorsBuffer[bidx+2]);
+				a = ~~min(255, (pColors[cidx+3] * 0.25) + pColorsBuffer[bidx+3]);
 				pColorsBuffer[bidx+0] = r;
 				pColorsBuffer[bidx+1] = g;
 				pColorsBuffer[bidx+2] = b;
@@ -276,14 +293,19 @@ var Flow = {
 		Flow.octx.drawImage(Flow.canvas, 0, 0);
 
 		//fps display
-		var fpsstr = "FPS: "+(1000/Flow.frameTime).toFixed(1);
-		Flow.octx.fillStyle = "black";
-		Flow.octx.fillRect(8,8,Flow.octx.measureText(fpsstr).width,16);
-		Flow.octx.fillStyle = "white";
-		Flow.octx.font = "12px monospace";
-		Flow.octx.textAlign = "left";
-		Flow.octx.textBaseline = "top";
-		Flow.octx.fillText(fpsstr, 8, 12);
+		if (Flow.settings.showDebug) {
+			Flow.octx.font = "12px monospace";
+			var strs = ["FPS: "+(1000/Flow.frameTime).toFixed(1), "#: "+activeCount];
+			var twidth = strs.reduce(function(val,item){return Math.max(val, Flow.octx.measureText(item).width);},0);
+			var theight = strs.length * 12;
+			Flow.octx.fillStyle = "black";
+			Flow.octx.fillRect(8,8,twidth,theight+4);
+			Flow.octx.fillStyle = "white";
+			Flow.octx.textAlign = "left";
+			Flow.octx.textBaseline = "top";
+			var y = -2;
+			strs.forEach(function(str){Flow.octx.fillText(str, 8, y+=12);});
+		}
 
 		requestAnimationFrame(Flow.draw);
 	},
@@ -331,7 +353,7 @@ var Flow = {
 	},
 
 	fromImage: function(url) {
-		console.log(url);
+		// console.log(url);
 		Flow.settings.gravity = 0;
 		Flow.settings.wind = 0;
 		Flow.settings.interactMode = "push";

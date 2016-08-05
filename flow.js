@@ -264,16 +264,16 @@ var Flow = {
 
 			//draw
 			var idx = (~~y)*w+(~~x);
-			var cidx = ~~(i*4/nProps);
+			var cidx = (i/nProps)<<2;
 			var r,g,b,a;
 
 			if (blending) {
 				var bidx = idx*4;
 				bidx = min(pcblen,max(0,bidx));
-				r = ~~min(255, (pColors[cidx+0] * 0.25) + pColorsBuffer[bidx+0]);
-				g = ~~min(255, (pColors[cidx+1] * 0.25) + pColorsBuffer[bidx+1]);
-				b = ~~min(255, (pColors[cidx+2] * 0.25) + pColorsBuffer[bidx+2]);
-				a = ~~min(255, (pColors[cidx+3] * 0.25) + pColorsBuffer[bidx+3]);
+				r = min(255, (pColors[cidx+0] >>> 2) + pColorsBuffer[bidx+0]);
+				g = min(255, (pColors[cidx+1] >>> 2) + pColorsBuffer[bidx+1]);
+				b = min(255, (pColors[cidx+2] >>> 2) + pColorsBuffer[bidx+2]);
+				a = min(255, (pColors[cidx+3] >>> 2) + pColorsBuffer[bidx+3]);
 				pColorsBuffer[bidx+0] = r;
 				pColorsBuffer[bidx+1] = g;
 				pColorsBuffer[bidx+2] = b;
